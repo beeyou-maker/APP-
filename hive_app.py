@@ -1,40 +1,77 @@
 import streamlit as st
 import requests
+import time
 
-# 1. YOUR GOOGLE WEB APP URL
-URL = "https://script.google.com/macros/s/AKfycbz_hLwiW9Q_SVhY4WTvwOzg2fcYxHZGdVAkbQp_jCS3Pnmbldhz1XMf-_Gu-CoSTdeiCw/exec"
+# --- CONFIG & SECRETS ---
+# Accessing the secrets you set in Step 1
+GOOGLE_URL = st.secrets["https://docs.google.com/spreadsheets/d/1lrqhtVyzgdbfU1jfNmEVcEEVkGwC-U7keY-2UT6vhmQ/edit?gid=0#gid=0"]
+ASSEMBLY_KEY = st.secrets["ASSEMBLYAI_API_KEY"]
 
-st.set_page_config(page_title="Hive Pro", layout="centered")
+st.set_page_config(page_title="Hive API Manager", page_icon="🐝", layout="wide")
 
-# --- SMART QR CODE LOGIC ---
-# This looks at the URL for "?id=..."
-query_params = st.query_params
-default_id = query_params.get("id", "") # If URL has ?id=Hive01, it grabs "Hive01"
+# --- FUNCTIONS ---
+def transcribe_audio(audio_file):
+    """Sends audio to AssemblyAI for transcription"""
+    headers = {'authorization': ASSEMBLY_KEY}
+    # Upload audio
+    upload_response = requests.post('https://api.assemblyai.com/v2/upload', headers=headers, data=audio_file)
+    audio_url = upload_response.json()['upload_url']
+    
+    # Start Transcription
+    trans_response = requests.post('https://api.assemblyai.com/v2/transcript', headers=headers, json={'audio_url': audio_url})
+    transcript_id = trans_response.json()['id']
+    
+    # Wait for result
+    while True:
+        polling_response = requests.get(f'https://api.assemblyai.com/v2/transcript/{transcript_id}', headers=headers)
+        if polling_response.json()['status'] == 'completed':
+            return polling_response.json()['text']
+        elif polling_response.json()['status'] == 'error':
+            return "Transcription Error"
+        time.sleep(1)
 
-st.title("🐝 Hive Inspection")
+# --- UI INTERFACE ---
+st.title("🐝 Hive API Manager")
 
-# If ID was in the QR code, it shows up here automatically
-hive_id = st.text_input("Hive ID", value=default_id)
+tab1, tab2 = st.tabs(["📋 New Inspection", "📜 View History"])
 
-st.write("---")
-st.markdown("### 📝 Observations")
-st.info("💡 Pro Tip: Tap the Microphone icon on your phone's keyboard to speak your notes!")
-
-# Text area where the transcribed text (from your keyboard) goes
-notes = st.text_area("Notes", height=150, placeholder="Tap here and use your phone's voice-to-text button...")
-
-# Save Button
-if st.button("💾 Save to Google Sheets", use_container_width=True):
-    if hive_id and notes:
-        payload = {"hive_id": hive_id, "notes": notes}
-        try:
-            response = requests.post(URL, json=payload)
-            if response.status_code == 200:
-                st.success(f"✅ Data for {hive_id} saved!")
+with tab1:
+    # 1. Automatic ID from QR code
+    query_params = st.query_params
+    qr_id = query_params.get("id", "")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        hive_id = st.text_input("Target Hive ID", value=qr_id)
+        
+    # 2. Voice Section
+    st.write("### 🎤 Audio Observation")
+    audio_data = st.audio_input("Record your voice note")
+    
+    # 3. Automatic Transcription Logic
+    notes = ""
+    if audio_data:
+        if st.button("✨ Transcribe Voice"):
+            with st.spinner("Converting speech to text..."):
+                notes = transcribe_audio(audio_data)
+                st.success("Transcribed!")
+    
+    # Editable Text Box (Manual or Transcribed)
+    final_notes = st.text_area("Inspection Notes", value=notes, height=150)
+    
+    if st.button("🚀 Save to Google Sheet", use_container_width=True):
+        if hive_id and final_notes:
+            payload = {"hive_id": hive_id, "notes": final_notes}
+            res = requests.post(GOOGLE_URL, json=payload)
+            if res.status_code == 200:
                 st.balloons()
+                st.success(f"Log for {hive_id} saved successfully!")
             else:
-                st.error("Failed to connect to Google Sheets.")
-        except Exception as e:
-            st.error(f"Error: {e}")
-    else:
-        st.warning("Please ensure Hive ID and Notes are filled.")
+                st.error("Submission failed.")
+        else:
+            st.warning("Please provide both Hive ID and Notes.")
+
+with tab2:
+    st.write("### Recent Logs")
+    st.info("The data is stored in your Google Sheet. Open it here:")
+    st.link_button("Go to Google Sheet", "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID_HERE")
